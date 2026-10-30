@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comma line</title>
+<meta name="description" content="Turn a screenshot or a pasted column into one comma-separated line. Everything runs in your browser.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+:root{--bg:#efeae2;--surface:#fbf8f3;--ink:#1f1a16;--muted:#6f675f;--line:#e2d9ce;--accent:#b8431f;--accent-ink:#fff8f4;--danger:#8f2d2d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:48rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+.eyebrow{font-size:.875rem;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin:0}
+h1{font-family:Georgia,"Times New Roman",serif;font-size:3.5rem;line-height:1;margin:.5rem 0 0;font-weight:600}
+.lead{margin:1rem 0 2rem;max-width:36rem;font-size:1.125rem;line-height:1.6;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:1.25rem;padding:.9rem}
+.card+.card{margin-top:1.5rem;padding:1.25rem}
+textarea{width:100%;background:transparent;border:0;outline:0;resize:vertical;font:inherit;font-size:1rem;line-height:1.6;color:var(--ink);padding:.5rem}
+textarea::placeholder{color:var(--muted)}
+#src{min-height:8rem}
+#out{min-height:7rem;background:var(--bg);border:1px solid var(--line);border-radius:.75rem;padding:.75rem 1rem}
+.row{display:flex;align-items:center;gap:.5rem;margin-top:.5rem}
+.row .right{margin-left:auto;display:flex;align-items:center;gap:.75rem}
+button{font:inherit;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+.round{width:2.75rem;height:2.75rem;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--ink);font-size:1.4rem;line-height:1}
+.go{background:var(--accent);color:var(--accent-ink);border:0}
+.ghost{background:none;border:0;color:var(--muted);font-size:.875rem;font-weight:500;height:2.75rem;padding:0 .75rem}
+.pill{height:2.75rem;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);padding:0 1rem;font-size:.875rem;font-weight:500}
+.status{font-size:.875rem;color:var(--muted)}
+.err{color:var(--danger);font-size:.875rem;margin:.75rem .5rem 0}
+.bar{height:4px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:.75rem}
+.bar div{height:100%;background:var(--accent);transition:width .2s}
+.shots{list-style:none;margin:0 0 .75rem;padding:0;display:flex;gap:.5rem;overflow-x:auto}
+.shots li{position:relative;flex:none}
+.shots img{width:5rem;height:5rem;object-fit:cover;border-radius:.75rem;border:1px solid var(--line);display:block}
+.shots button{position:absolute;top:.25rem;right:.25rem;width:1.75rem;height:1.75rem;border-radius:50%;border:0;background:var(--ink);color:var(--accent-ink);line-height:1}
+.head{display:flex;align-items:center;justify-content:space-between;gap:.75rem;margin-bottom:.75rem}
+h2{font-family:Georgia,serif;font-size:1.5rem;margin:0;font-weight:600}
+.hidden{display:none}
+.note{margin-top:2rem;font-size:.8rem;color:var(--muted)}
+@media(max-width:600px){h1{font-size:2.75rem}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">English lists only</p>
+    <h1>Comma line</h1>
+    <p class="lead">One box. Paste a column or a screenshot, then turn it into a single line.</p>
+  </header>
+
+  <section class="card">
+    <ul class="shots hidden" id="shots"></ul>
+    <textarea id="src" placeholder="Paste a column of names, or a screenshot (Ctrl/Cmd+V, drag & drop, or +)"></textarea>
+    <div class="row">
+      <button class="round" id="add" type="button" aria-label="Add a photo">+</button>
+      <input id="file" type="file" accept="image/*" multiple class="hidden">
+      <button class="ghost" id="clear" type="button" disabled>Clear</button>
+      <div class="right">
+        <span class="status" id="status" aria-live="polite"></span>
+        <button class="round go" id="go" type="button" aria-label="Make the line" disabled>&#8593;</button>
+      </div>
+    </div>
+    <div class="bar hidden" id="barwrap"><div id="bar" style="width:8%"></div></div>
+    <p class="err hidden" id="err" role="alert"></p>
+  </section>
+
+  <section class="card">
+    <div class="head">
+      <h2>Result</h2>
+      <button class="pill" id="copy" type="button" disabled>Copy</button>
+    </div>
+    <textarea id="out" readonly placeholder="Your line will show up here"></textarea>
+  </section>
+
+  <p class="note">Runs fully in your browser. Photos and text are never uploaded. Your last input is kept in this browser’s local storage until you press Clear.</p>
+</main>
+
+<script src="vendor/tesseract.min.js"></script>
+<script src="vendor/assets.js"></script>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var src=$("src"),out=$("out"),shotsEl=$("shots"),fileIn=$("file"),
+      clearBtn=$("clear"),goBtn=$("go"),copyBtn=$("copy"),statusEl=$("status"),
+      barwrap=$("barwrap"),bar=$("bar"),errEl=$("err");
+  var shots=[],busy=false,result="";
+
+  function toCommaLine(text){
+    if(!text.trim())return "";
+    var lines=text.replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n").map(function(l){return l.trim()}).filter(Boolean);
+    var items=[];
+    lines.forEach(function(raw){
+      var line=raw.replace(/^[\s•·▪◦●○\-–—*_>»]+/,"").replace(/^\d+[.)]\s*/,"").replace(/[|¦]/g," ").replace(/\s+/g," ").trim();
+      if(!line)return;
+      var parts=/[,;|\t]/.test(line)?line.split(/[,;|\t]+/):[line];
+      parts.forEach(function(part){
+        var item=part.replace(/^[\s•·▪◦●○\-–—*_>»]+/,"").replace(/^\d+[.)]\s*/,"").replace(/\s+/g," ").replace(/^[,:;]+|[,:;]+$/g,"").trim();
+        if(item)items.push(item);
+      });
+    });
+    return items.join(",");
+  }
+
+  function setErr(m){errEl.textContent=m||"";errEl.classList.toggle("hidden",!m)}
+  var KEY="comma-line-v1";
+  function fileToDataUrl(f){return new Promise(function(res){var r=new FileReader();r.onload=function(){res(r.result)};r.onerror=function(){res(null)};r.readAsDataURL(f)})}
+  async function save(){
+    var data={text:src.value,result:result,images:[]};
+    try{
+      for(var i=0;i<shots.length;i++){var d=await fileToDataUrl(shots[i].file);if(d)data.images.push(d)}
+      try{localStorage.setItem(KEY,JSON.stringify(data))}
+      catch(e){data.images=[];localStorage.setItem(KEY,JSON.stringify(data))} // too big: keep text only
+    }catch(e){}
+  }
+  function wipeStorage(){
+    try{localStorage.removeItem(KEY)}catch(e){}
+    try{["keyval-store","tesseract"].forEach(function(n){indexedDB.deleteDatabase(n)})}catch(e){}
+  }
+  async function restore(){
+    try{
+      var raw=localStorage.getItem(KEY);if(!raw)return;
+      var data=JSON.parse(raw);
+      src.value=data.text||"";result=data.result||"";
+      for(var i=0;i<(data.images||[]).length;i++){
+        var blob=await (await fetch(data.images[i])).blob();
+        shots.push({file:new File([blob],"saved-"+i+".png",{type:blob.type}),url:URL.createObjectURL(blob)});
+      }
+      renderShots();
+    }catch(e){}
+  }
+  function refresh(){
+    out.value=result;
+    copyBtn.disabled=!result;
+    goBtn.disabled=busy||!(src.value.trim()||shots.length);
+    clearBtn.disabled=!(src.value||shots.length||result);
+    shotsEl.classList.toggle("hidden",!shots.length);
+    if(src.value||shots.length||result)save();else try{localStorage.removeItem(KEY)}catch(e){}
+  }
+  function renderShots(){
+    shotsEl.innerHTML="";
+    shots.forEach(function(s){
+      var li=document.createElement("li"),img=document.createElement("img"),b=document.createElement("button");
+      img.src=s.url;img.alt="";b.type="button";b.textContent="×";b.setAttribute("aria-label","Remove photo");
+      b.onclick=function(){URL.revokeObjectURL(s.url);shots=shots.filter(function(x){return x!==s});renderShots();refresh()};
+      li.appendChild(img);li.appendChild(b);shotsEl.appendChild(li);
+    });
+  }
+  function addImages(files){
+    files=Array.prototype.filter.call(files,function(f){return f.type.indexOf("image/")===0});
+    if(!files.length)return false;
+    files.forEach(function(f){shots.push({file:f,url:URL.createObjectURL(f)})});
+    setErr("");renderShots();refresh();return true;
+  }
+
+  // Enlarge small shots and flip dark backgrounds so thin letters survive OCR.
+  async function prepare(file){
+    var bmp=await createImageBitmap(file);
+    var longest=Math.max(bmp.width,bmp.height);
+    var scale=longest<700?4:longest<1400?2:1;
+    var c=document.createElement("canvas");
+    c.width=Math.round(bmp.width*scale);c.height=Math.round(bmp.height*scale);
+    var ctx=c.getContext("2d",{willReadFrequently:true});
+    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality="high";
+    ctx.drawImage(bmp,0,0,c.width,c.height);bmp.close();
+    var img=ctx.getImageData(0,0,c.width,c.height),d=img.data,sum=0,i;
+    for(i=0;i<d.length;i+=4)sum+=d[i]*.299+d[i+1]*.587+d[i+2]*.114;
+    var dark=sum/(d.length/4)<140;
+    for(i=0;i<d.length;i+=4){
+      var t=d[i]*.299+d[i+1]*.587+d[i+2]*.114;
+      if(dark)t=255-t;
+      t=(t-30)*(255/180);t=t<0?0:t>255?255:t;
+      d[i]=d[i+1]=d[i+2]=t;
+    }
+    ctx.putImageData(img,0,0);
+    return await new Promise(function(r){c.toBlob(r,"image/png")});
+  }
+
+  var workerUrl=null,langData=null;
+  function assets(){
+    if(!workerUrl)workerUrl=URL.createObjectURL(new Blob([window.TESS_WORKER_SRC],{type:"application/javascript"}));
+    if(!langData){
+      var bin=atob(window.TESS_LANG_B64),n=bin.length,u=new Uint8Array(n);
+      for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);
+      langData=u;
+    }
+  }
+  async function ocr(file,onProgress){
+    assets();
+    var worker=await Tesseract.createWorker([{code:"eng",data:langData}],1,{
+      workerPath:workerUrl,
+      workerBlobURL:false,
+      cacheMethod:"none",
+      logger:function(m){onProgress(m.status||"working",typeof m.progress==="number"?m.progress:0)}
+    });
+    try{
+      var blob=await prepare(file);
+      var r=await worker.recognize(blob);
+      return toCommaLine(r.data.text);
+    }finally{await worker.terminate()}
+  }
+
+  async function submit(){
+    if(busy)return;
+    if(!shots.length){
+      result=toCommaLine(src.value);
+      setErr(result?"":"Paste a column or a screenshot first.");
+      refresh();return;
+    }
+    busy=true;setErr("");barwrap.classList.remove("hidden");refresh();
+    try{
+      var pieces=[];
+      for(var i=0;i<shots.length;i++){
+        statusEl.textContent=shots.length>1?"Reading photo "+(i+1)+" of "+shots.length:"Reading the list";
+        var line=await ocr(shots[i].file,function(st,p){
+          bar.style.width=Math.max(8,Math.round(p*100))+"%";
+          if(st==="loading language traineddata")statusEl.textContent="Loading English language data";
+        });
+        if(line)pieces.push(line);
+      }
+      result=pieces.join(",");
+      if(!result)setErr("No English text found. Try a sharper screenshot, or paste the column as text.");
+    }catch(e){setErr((e&&e.message)||"Could not read the photo.")}
+    finally{busy=false;statusEl.textContent="";barwrap.classList.add("hidden");refresh()}
+  }
+
+  async function copy(){
+    if(!result)return;
+    try{await navigator.clipboard.writeText(result)}
+    catch(e){out.focus();out.select();if(!document.execCommand("copy")){setErr("Copy failed. Select the line and copy it manually.");return}}
+    copyBtn.textContent="Copied";setErr("");
+    setTimeout(function(){copyBtn.textContent="Copy"},1600);
+  }
+
+  src.addEventListener("input",function(){
+    setErr("");
+    if(!shots.length)result=toCommaLine(src.value);
+    refresh();
+  });
+  src.addEventListener("keydown",function(e){if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();submit()}});
+  src.addEventListener("dragover",function(e){e.preventDefault()});
+  src.addEventListener("drop",function(e){
+    e.preventDefault();
+    if(!addImages(e.dataTransfer.files))setErr("That file is not an image.");
+  });
+  window.addEventListener("paste",function(e){
+    var dt=e.clipboardData;if(!dt)return;
+    var imgs=Array.prototype.filter.call(dt.files,function(f){return f.type.indexOf("image/")===0});
+    if(!imgs.length)Array.prototype.forEach.call(dt.items,function(it){if(it.type.indexOf("image/")===0){var f=it.getAsFile();if(f)imgs.push(f)}});
+    if(imgs.length){e.preventDefault();addImages(imgs)}
+  });
+  $("add").onclick=function(){fileIn.click()};
+  fileIn.onchange=function(){if(fileIn.files.length)addImages(fileIn.files);fileIn.value=""};
+  goBtn.onclick=submit;copyBtn.onclick=copy;
+  clearBtn.onclick=function(){
+    shots.forEach(function(s){URL.revokeObjectURL(s.url)});
+    shots=[];src.value="";result="";setErr("");statusEl.textContent="";renderShots();wipeStorage();refresh();
+  };
+  restore().then(refresh);
+})();
+</script>
+</body>
+</html>
